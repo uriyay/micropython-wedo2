@@ -37,13 +37,14 @@ _ADV_DIRECT_IND = const(0x01)
 
 _ADV_TYPE_NAME = const(0x09)
 
-WEDO2_SERVICE_UUID = bluetooth.UUID('00004f0e-1212-efde-1523-785feabcd123')
-Sensor_Value_UUID = bluetooth.UUID('00001560-1212-efde-1523-785feabcd123')
-Value_format_UUID = bluetooth.UUID('00001561-1212-efde-1523-785feabcd123')
-Input_Command_UUID = bluetooth.UUID('00001563-1212-efde-1523-785feabcd123')
-Output_Command_UUID = bluetooth.UUID('00001565-1212-efde-1523-785feabcd123')
+WEDO2_SERVICE_UUID = bluetooth.UUID("00004f0e-1212-efde-1523-785feabcd123")
+Sensor_Value_UUID = bluetooth.UUID("00001560-1212-efde-1523-785feabcd123")
+Value_format_UUID = bluetooth.UUID("00001561-1212-efde-1523-785feabcd123")
+Input_Command_UUID = bluetooth.UUID("00001563-1212-efde-1523-785feabcd123")
+Output_Command_UUID = bluetooth.UUID("00001565-1212-efde-1523-785feabcd123")
 
 scan_results = []
+
 
 def decode_field(payload, adv_type):
     i = 0
@@ -54,9 +55,11 @@ def decode_field(payload, adv_type):
         i += 1 + payload[i]
     return result
 
+
 def decode_name(payload):
     n = decode_field(payload, _ADV_TYPE_NAME)
     return str(n[0], "utf-8") if n else ""
+
 
 class Wedo2:
     def __init__(self):
@@ -78,8 +81,8 @@ class Wedo2:
         self.output_command_handle = None
 
     def scan(self):
-        print('scanning..')
-        #https://stackoverflow.com/a/66307619
+        print("scanning..")
+        # https://stackoverflow.com/a/66307619
         self.ble.gap_scan(5000, 1280000, 11250, True)
 
     def ble_handler(self, event, data):
@@ -87,44 +90,48 @@ class Wedo2:
             addr_type, addr, adv_type, rssi, adv_data = data
             addr = bytes(addr)
             adv_data = bytes(adv_data)
-            name = decode_name(adv_data) or '?'
-            #scan_results
-            print("address: {}, rssi: {}, adv_data = {}, name = {}".format(addr, rssi, adv_data, name))
-            if name == 'LPF2 Smart Hub':
+            name = decode_name(adv_data) or "?"
+            # scan_results
+            print(
+                "address: {}, rssi: {}, adv_data = {}, name = {}".format(
+                    addr, rssi, adv_data, name
+                )
+            )
+            if name == "LPF2 Smart Hub":
                 self.address = addr
                 self._addr_type = addr_type
                 self.ble.gap_scan(None)
         elif event == _IRQ_SCAN_DONE:
-            print('scan is over')
+            print("scan is over")
             if self.address:
-                #connect
-                print('connecting to address {}'.format(self.address))
+                # connect
+                print("connecting to address {}".format(self.address))
                 self.ble.gap_connect(self._addr_type, self.address)
-        elif event == _IRQ_PERIPHERAL_CONNECT :
+        elif event == _IRQ_PERIPHERAL_CONNECT:
             conn_handle, addr_type, addr = data
             addr = bytes(addr)
-            print('device is connected: address = {}'.format(addr))
+            print("device is connected: address = {}".format(addr))
             if addr == self.address:
-                print('setting conn_handle')
+                print("setting conn_handle")
                 self.conn_handle = conn_handle
-                print('discovering services..')
+                print("discovering services..")
                 self.ble.gattc_discover_services(self.conn_handle)
         elif event == _IRQ_PERIPHERAL_DISCONNECT:
-            print('device is disconnected')
+            print("device is disconnected")
             self.reset()
         elif event == _IRQ_GATTC_SERVICE_RESULT:
             conn_handle, start_handle, end_handle, uuid = data
             uuid = bytes(uuid)
-            print('found service for conn_handle={}, uuid={}'.format(conn_handle, uuid))
+            print("found service for conn_handle={}, uuid={}".format(conn_handle, uuid))
             if conn_handle == self.conn_handle and uuid == bytes(WEDO2_SERVICE_UUID):
-                print('found wedo2 service!')
+                print("found wedo2 service!")
                 self.start_handle = start_handle
                 self.end_handle = end_handle
         elif event == _IRQ_GATTC_SERVICE_DONE:
-            print('discovering services ended')
+            print("discovering services ended")
             # Service query complete.
             if self.start_handle and self.end_handle:
-                print('discovering characteristics for wedo2 service..')
+                print("discovering characteristics for wedo2 service..")
                 self.ble.gattc_discover_characteristics(
                     self.conn_handle, self.start_handle, self.end_handle
                 )
@@ -134,35 +141,38 @@ class Wedo2:
             # Connected device returned a characteristic.
             conn_handle, def_handle, value_handle, properties, uuid = data
             uuid = bytes(uuid)
-            print('found char uuid={}'.format(uuid))
+            print("found char uuid={}".format(uuid))
             if conn_handle == self.conn_handle and uuid == bytes(Sensor_Value_UUID):
-                print('sensor_value_handle = {}'.format(value_handle))
+                print("sensor_value_handle = {}".format(value_handle))
                 self.sensor_value_handle = value_handle
-            elif conn_handle == self._conn_handle and uuid == bytes(Value_format_UUID):
-                print('value_format_handle = {}'.format(value_handle))
+            elif conn_handle == self.conn_handle and uuid == bytes(Value_format_UUID):
+                print("value_format_handle = {}".format(value_handle))
                 self.value_format_handle = value_handle
-            elif conn_handle == self._conn_handle and uuid == bytes(Input_Command_UUID):
-                print('input_command_handle = {}'.format(value_handle))
+            elif conn_handle == self.conn_handle and uuid == bytes(Input_Command_UUID):
+                print("input_command_handle = {}".format(value_handle))
                 self.input_command_handle = value_handle
-            elif conn_handle == self._conn_handle and uuid == bytes(Output_Command_UUID):
-                print('output_command_handle = {}'.format(value_handle))
+            elif conn_handle == self.conn_handle and uuid == bytes(
+                Output_Command_UUID
+            ):
+                print("output_command_handle = {}".format(value_handle))
                 self.output_command_handle = value_handle
-
         elif event == _IRQ_GATTC_CHARACTERISTIC_DONE:
             # Characteristic query complete.
-            print('discovering chars ended')
-            if all([self.sensor_value_handle,
+            print("discovering chars ended")
+            if all(
+                [
+                    self.sensor_value_handle,
                     self.value_format_handle,
                     self.input_command_handle,
-                    self.output_command_handle]):
-                print('succeeded to find all chars')
+                    self.output_command_handle,
+                ]
+            ):
+                print("succeeded to find all chars")
             else:
                 print("Failed to find wedo2 service characteristic.")
-
         elif event == _IRQ_GATTC_WRITE_DONE:
             conn_handle, value_handle, status = data
             print("write to handle={} done".format(value_handle))
-
         elif event == _IRQ_GATTC_NOTIFY:
             conn_handle, value_handle, notify_data = data
             notify_data = bytes(notify_data)
@@ -170,11 +180,12 @@ class Wedo2:
                 self.notify_callback(value_handle, notify_data)
 
     def is_connected(self):
-        return all([
-            self.conn_handle,
-            self.sensor_value_handle,
-            self.value_format_handle,
-            self.input_command_handle,
-            self.output_command_handle])
-
-    #def input_command(self,
+        return all(
+            [
+                self.conn_handle,
+                self.sensor_value_handle,
+                self.value_format_handle,
+                self.input_command_handle,
+                self.output_command_handle,
+            ]
+        )
