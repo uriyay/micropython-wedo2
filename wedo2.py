@@ -1,4 +1,5 @@
 import bluetooth
+import struct
 from micropython import const
 
 _IRQ_CENTRAL_CONNECT = const(1)
@@ -43,7 +44,9 @@ Value_format_UUID = bluetooth.UUID("00001561-1212-efde-1523-785feabcd123")
 Input_Command_UUID = bluetooth.UUID("00001563-1212-efde-1523-785feabcd123")
 Output_Command_UUID = bluetooth.UUID("00001565-1212-efde-1523-785feabcd123")
 
-scan_results = []
+MOTOR_COMMAND_ID = const(0x01)
+INPUT_VALUE_COMMAND_ID = const(0x)
+INPUT_FORMAT_COMMAND_ID = const(0x1)
 
 
 def decode_field(payload, adv_type):
@@ -189,3 +192,25 @@ class Wedo2:
                 self.output_command_handle,
             ]
         )
+
+    def input_command(self, command):
+        self.ble.gattc_write(self.conn_handle, self.input_command_handle, command, mode=1)
+
+    def output_command(self, hub_idx, command_id, command_data):
+        command = struct.pack('BBB', hub_idx, command_id, len(command_data)) + command_data
+        self.ble.gattc_write(self.conn_handle, self.output_command_handle, command, mode=1)
+
+    def turn_motor(self, hub_idx, power):
+        #TODO: get the hub_idx automatically from the service data
+        # from https://github.com/jannopet/LEGO-WeDo-2.0-Python-SDK
+        is_positive = power >= 0
+        power = abs(power)
+
+        actual_power = ((100.0 - offset) / 100.0) * power + offset
+        actual_result_int = round(actual_power)
+
+        if not is_positive:
+            actual_result_int = -actual_result_int
+
+        command_data = struct.pack('b', actual_result_int)
+        self.output_command(hub_idx, MOTOR_COMMAND_ID, command_data)
