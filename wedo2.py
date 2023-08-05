@@ -1,5 +1,6 @@
 import bluetooth
 import struct
+import collections
 from micropython import const
 
 _IRQ_CENTRAL_CONNECT = const(1)
@@ -39,14 +40,31 @@ _ADV_DIRECT_IND = const(0x01)
 _ADV_TYPE_NAME = const(0x09)
 
 WEDO2_SERVICE_UUID = bluetooth.UUID("00004f0e-1212-efde-1523-785feabcd123")
+NORDIC_LED_BUTTON_SERVICE = bluetooth.UUID("00001523-1212-efde-1523-785feabcd123")
 Sensor_Value_UUID = bluetooth.UUID("00001560-1212-efde-1523-785feabcd123")
 Value_format_UUID = bluetooth.UUID("00001561-1212-efde-1523-785feabcd123")
 Input_Command_UUID = bluetooth.UUID("00001563-1212-efde-1523-785feabcd123")
 Output_Command_UUID = bluetooth.UUID("00001565-1212-efde-1523-785feabcd123")
+Attached_UUID = bluetooth.UUID("00001527-1212-EFDE-1523-785FEABCD123")
+Attached_Config_UUID = b'\x02)'
+
+NOTIFY_ENABLE = const(1)
+
+IO_TYPE_MOTOR = const(1)
+IO_TYPE_VOLTAGE = const(20)
+IO_TYPE_CURRENT = const(21)
+IO_TYPE_PIEZO_TONE_PLAYER = const(22)
+IO_TYPE_RGB_LIGHT = const(23)
+IO_TYPE_TILT_SENSOR = const(34)
+IO_TYPE_MOTION_SENSOR = const(35)
+IO_TYPE_GENERIC = const(0)
 
 MOTOR_COMMAND_ID = const(0x01)
-INPUT_VALUE_COMMAND_ID = const(0x)
+INPUT_VALUE_COMMAND_ID = const(0x0)
 INPUT_FORMAT_COMMAND_ID = const(0x1)
+
+MOTOR_BREAK = const(127)
+MOTOR_DRIFT = const(0)
 
 
 def decode_field(payload, adv_type):
@@ -76,12 +94,27 @@ class Wedo2:
         self.address = None
         self._addr_type = None
         self.conn_handle = None
-        self.start_handle = None
-        self.end_handle = None
+        self.wedo_start_handle = None
+        self.wedo_end_handle = None
+        self.nordic_start_handle = None
+        self.nordic_end_handle = None
         self.sensor_value_handle = None
         self.value_format_handle = None
         self.input_command_handle = None
         self.output_command_handle = None
+        self.attached_handle = None
+        self.attached_end_handle = None
+        self.attached_config_dsc_handle = None
+        self.connect_id_motor = None
+        self.connect_id_voltage = None
+        self.connect_id_current = None
+        self.connect_id_piezo = None
+        self.connect_id_rgb_light = None
+        self.connect_id_tilt_sensor = None
+        self.connect_id_motion_sensor = None
+        self.connect_id_generic = None
+        self.tried_discovering_noridc = False
+        self.callbacks = []
 
     def scan(self):
         print("scanning..")
@@ -126,39 +159,47 @@ class Wedo2:
             conn_handle, start_handle, end_handle, uuid = data
             uuid = bytes(uuid)
             print("found service for conn_handle={}, uuid={}".format(conn_handle, uuid))
-            if conn_handle == self.conn_handle and uuid == bytes(WEDO2_SERVICE_UUID):
-                print("found wedo2 service!")
-                self.start_handle = start_handle
-                self.end_handle = end_handle
+            if conn_handle == self.conn_handle:
+                if uuid == bytes(WEDO2_SERVICE_UUID):
+                    print("found wedo2 service!")
+                    self.wedo_start_handle = start_handle
+                    self.wedo_end_handle = end_handle
+
+                elif uuid == bytes(NORDIC_LED_BUTTON_SERVICE):
+                    print("found nordic led button service")
+                    self.nordic_start_handle = start_handle
+                    self.nordic_end_handle = end_handle
+
         elif event == _IRQ_GATTC_SERVICE_DONE:
             print("discovering services ended")
+            print("discovering characteristics for wedo2 service..")
+            self.ble.gattc_discover_characteristics(
+                self.conn_handle, self.wedo_start_handle, self.wedo_end_handle
+            )
             # Service query complete.
-            if self.start_handle and self.end_handle:
-                print("discovering characteristics for wedo2 service..")
-                self.ble.gattc_discover_characteristics(
-                    self.conn_handle, self.start_handle, self.end_handle
-                )
-            else:
-                print("Failed to find wedo2 service")
         elif event == _IRQ_GATTC_CHARACTERISTIC_RESULT:
             # Connected device returned a characteristic.
-            conn_handle, def_handle, value_handle, properties, uuid = data
+            conn_handle, end_handle, value_handle, properties, uuid = data
             uuid = bytes(uuid)
             print("found char uuid={}".format(uuid))
-            if conn_handle == self.conn_handle and uuid == bytes(Sensor_Value_UUID):
-                print("sensor_value_handle = {}".format(value_handle))
-                self.sensor_value_handle = value_handle
-            elif conn_handle == self.conn_handle and uuid == bytes(Value_format_UUID):
-                print("value_format_handle = {}".format(value_handle))
-                self.value_format_handle = value_handle
-            elif conn_handle == self.conn_handle and uuid == bytes(Input_Command_UUID):
-                print("input_command_handle = {}".format(value_handle))
-                self.input_command_handle = value_handle
-            elif conn_handle == self.conn_handle and uuid == bytes(
-                Output_Command_UUID
-            ):
-                print("output_command_handle = {}".format(value_handle))
-                self.output_command_handle = value_handle
+            if conn_handle == self.conn_handle:
+                if uuid == bytes(Sensor_Value_UUID):
+                    print("sensor_value_handle = {}".format(value_handle))
+                    self.sensor_value_handle = value_handle
+                elif uuid == bytes(Value_format_UUID):
+                    print("value_format_handle = {}".format(value_handle))
+                    self.value_format_handle = value_handle
+                elif uuid == bytes(Input_Command_UUID):
+                    print("input_command_handle = {}".format(value_handle))
+                    self.input_command_handle = value_handle
+                elif uuid == bytes(Output_Command_UUID):
+                    print("output_command_handle = {}".format(value_handle))
+                    self.output_command_handle = value_handle
+                elif uuid == bytes(Attached_UUID):
+                    print("attached uuid handle = {}".format(value_handle))
+                    self.attached_handle = value_handle
+                    self.attached_end_handle = end_handle
+
         elif event == _IRQ_GATTC_CHARACTERISTIC_DONE:
             # Characteristic query complete.
             print("discovering chars ended")
@@ -173,14 +214,63 @@ class Wedo2:
                 print("succeeded to find all chars")
             else:
                 print("Failed to find wedo2 service characteristic.")
+
+            if self.attached_handle is None and not self.tried_discovering_noridc:
+                self.tried_discovering_noridc = True
+                print("discovering characteristics for nordic led btton service..")
+                self.ble.gattc_discover_characteristics(
+                    self.conn_handle, self.nordic_start_handle, self.nordic_end_handle
+                )
+            else:
+                if self.attached_handle is None:
+                    print("Failed to find nordic service chars")
+                else:
+                    print("found noridc chars")
+                    #discover descriptors
+                    self.ble.gattc_discover_descriptors(self.conn_handle,
+                        self.attached_handle,
+                        self.attached_end_handle
+                    )
+
+            #self.ble.
+        elif event == _IRQ_GATTC_DESCRIPTOR_RESULT:
+            # Called for each descriptor found by gattc_discover_descriptors().
+            conn_handle, dsc_handle, uuid = data
+            uuid = bytes(uuid)
+            print("got dsc_handle = {} for uuid = {}".format(dsc_handle, uuid))
+            if uuid == Attached_Config_UUID:
+                self.attached_config_dsc_handle = dsc_handle
+        elif event == _IRQ_GATTC_DESCRIPTOR_DONE:
+            # Called once service discovery is complete.
+            # Note: Status will be zero on success, implementation-specific value otherwise.
+            conn_handle, status = data
+            self.discover_hub_idx()
+
         elif event == _IRQ_GATTC_WRITE_DONE:
             conn_handle, value_handle, status = data
-            print("write to handle={} done".format(value_handle))
+            print("write to handle={} done, status={}".format(value_handle, status))
         elif event == _IRQ_GATTC_NOTIFY:
             conn_handle, value_handle, notify_data = data
             notify_data = bytes(notify_data)
+            print("got notify, value_handle={}, notify_data={}".format(value_handle, notify_data))
             if conn_handle == self.conn_handle:
                 self.notify_callback(value_handle, notify_data)
+        elif event == _IRQ_GATTC_READ_RESULT:
+            conn_handle, value_handle, char_data = data
+            char_data = bytes(char_data)
+            print("got read result for value_handle={}, char_data={}".format(value_handle, char_data))
+        elif event == _IRQ_GATTC_READ_DONE:
+            conn_handle, value_handle, status = data
+            print("read done for value_handle={}, status={}".format(value_handle, status))
+        elif event == _IRQ_GATTC_INDICATE:
+            # A server has sent an indicate request.
+            conn_handle, value_handle, notify_data = data
+            print("got gattc indicate")
+        elif event == _IRQ_GATTS_INDICATE_DONE:
+            # A client has acknowledged the indication.
+            # Note: Status will be zero on successful acknowledgment, implementation-specific value otherwise.
+            conn_handle, value_handle, status = data
+            print("got indicate done")
 
     def is_connected(self):
         return all(
@@ -193,14 +283,53 @@ class Wedo2:
             ]
         )
 
+    def disconnect(self):
+        self.ble.gap_disconnect(self.conn_handle)
+        self.reset()
+
+    def notify_callback(self, value_handle, data):
+        print("notify_callback: value_handle = {}, notify_data = {}".format(value_handle, data))
+        if value_handle == self.attached_handle:
+            if len(data) < 2:
+                print("Something went wrong when retrieving attached io data")
+
+            connect_id = data[0:1][0]
+            attached = data[1:2][0]
+
+            if attached == 1:
+                hub_index = data[2:3][0]
+                io_type = data[3:4][0]
+                print("attached connect_id={}, hub_index={}, io_type={}".format(
+                    connect_id, hub_index, io_type))
+                if io_type == IO_TYPE_CURRENT:
+                    self.connect_id_current = connect_id
+                elif io_type == IO_TYPE_GENERIC:
+                    self.connect_id_generic = connect_id
+                elif io_type == IO_TYPE_MOTION_SENSOR:
+                    self.connect_id_motion_sensor = connect_id
+                elif io_type == IO_TYPE_MOTOR:
+                    self.connect_id_motor = connect_id
+                elif io_type == IO_TYPE_PIEZO_TONE_PLAYER:
+                    self.connect_id_piezo = connect_id
+                elif io_type == IO_TYPE_RGB_LIGHT:
+                    self.connect_id_rgb_light = connect_id
+                elif io_type == IO_TYPE_TILT_SENSOR:
+                    self.connect_id_tilt_sensor = connect_id
+                elif io_type == IO_TYPE_VOLTAGE:
+                    self.connect_id_voltage = connect_id
+
+    def discover_hub_idx(self):
+        self.ble.gattc_write(self.conn_handle, self.attached_config_dsc_handle, struct.pack('<h', NOTIFY_ENABLE), 1)
+
     def input_command(self, command):
         self.ble.gattc_write(self.conn_handle, self.input_command_handle, command, mode=1)
 
     def output_command(self, hub_idx, command_id, command_data):
         command = struct.pack('BBB', hub_idx, command_id, len(command_data)) + command_data
-        self.ble.gattc_write(self.conn_handle, self.output_command_handle, command, mode=1)
+        self.ble.gattc_write(self.conn_handle, self.output_command_handle, command,
+            1) #mode=1
 
-    def turn_motor(self, hub_idx, power):
+    def _motor_power(self, power, offset):
         #TODO: get the hub_idx automatically from the service data
         # from https://github.com/jannopet/LEGO-WeDo-2.0-Python-SDK
         is_positive = power >= 0
@@ -213,4 +342,16 @@ class Wedo2:
             actual_result_int = -actual_result_int
 
         command_data = struct.pack('b', actual_result_int)
-        self.output_command(hub_idx, MOTOR_COMMAND_ID, command_data)
+        self.output_command(self.connect_id_motor, MOTOR_COMMAND_ID, command_data)
+
+    def motor_turn(self, power):
+        self._motor_power(power, 35)
+
+    def motor_break(self):
+        self._motor_power(MOTOR_BREAK, 0)
+
+    def motor_drift(self):
+        self._motor_power(MOTOR_DRIFT, 0)
+
+w = Wedo2()
+w.scan()
