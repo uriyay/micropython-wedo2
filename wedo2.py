@@ -81,6 +81,36 @@ def decode_name(payload):
     n = decode_field(payload, _ADV_TYPE_NAME)
     return str(n[0], "utf-8") if n else ""
 
+class ConnectId:
+    def __init__(self, connect_id, hub_index, io_type):
+        self.connect_id = connect_id
+        self.hub_index = hub_index
+        self.io_type = io_type
+
+    def is_motor(self):
+        return self.io_type == IO_TYPE_MOTOR
+
+    def is_current(self):
+        return self.io_type == IO_TYPE_CURRENT
+
+    def is_generic(self):
+        return self.io_type == IO_TYPE_GENERIC
+
+    def is_motion_sensor(self):
+        return self.io_type == IO_TYPE_MOTION_SENSOR
+
+    def is_piezo_tone_player(self):
+        return self.io_type == IO_TYPE_PIEZO_TONE_PLAYER
+
+    def is_rgb_light(self):
+        return self.io_type == IO_TYPE_RGB_LIGHT
+
+    def is_tilt_sensor(self):
+        return self.io_type == IO_TYPE_TILT_SENSOR
+
+    def is_voltage(self):
+        return self.io_type == IO_TYPE_VOLTAGE
+
 
 class Wedo2:
     def __init__(self):
@@ -105,16 +135,9 @@ class Wedo2:
         self.attached_handle = None
         self.attached_end_handle = None
         self.attached_config_dsc_handle = None
-        self.connect_id_motor = None
-        self.connect_id_voltage = None
-        self.connect_id_current = None
-        self.connect_id_piezo = None
-        self.connect_id_rgb_light = None
-        self.connect_id_tilt_sensor = None
-        self.connect_id_motion_sensor = None
-        self.connect_id_generic = None
         self.tried_discovering_noridc = False
         self.callbacks = []
+        self.attached_devices = []
 
     def scan(self):
         print("scanning..")
@@ -301,22 +324,7 @@ class Wedo2:
                 io_type = data[3:4][0]
                 print("attached connect_id={}, hub_index={}, io_type={}".format(
                     connect_id, hub_index, io_type))
-                if io_type == IO_TYPE_CURRENT:
-                    self.connect_id_current = connect_id
-                elif io_type == IO_TYPE_GENERIC:
-                    self.connect_id_generic = connect_id
-                elif io_type == IO_TYPE_MOTION_SENSOR:
-                    self.connect_id_motion_sensor = connect_id
-                elif io_type == IO_TYPE_MOTOR:
-                    self.connect_id_motor = connect_id
-                elif io_type == IO_TYPE_PIEZO_TONE_PLAYER:
-                    self.connect_id_piezo = connect_id
-                elif io_type == IO_TYPE_RGB_LIGHT:
-                    self.connect_id_rgb_light = connect_id
-                elif io_type == IO_TYPE_TILT_SENSOR:
-                    self.connect_id_tilt_sensor = connect_id
-                elif io_type == IO_TYPE_VOLTAGE:
-                    self.connect_id_voltage = connect_id
+                self.attached_devices.append(ConnectId(connect_id, hub_index, io_type))
 
     def discover_hub_idx(self):
         self.ble.gattc_write(self.conn_handle, self.attached_config_dsc_handle, struct.pack('<h', NOTIFY_ENABLE), 1)
@@ -329,9 +337,7 @@ class Wedo2:
         self.ble.gattc_write(self.conn_handle, self.output_command_handle, command,
             1) #mode=1
 
-    def _motor_power(self, power, offset):
-        #TODO: get the hub_idx automatically from the service data
-        # from https://github.com/jannopet/LEGO-WeDo-2.0-Python-SDK
+    def _motor_power(self, hub_idx, power, offset):
         is_positive = power >= 0
         power = abs(power)
 
@@ -342,16 +348,17 @@ class Wedo2:
             actual_result_int = -actual_result_int
 
         command_data = struct.pack('b', actual_result_int)
-        self.output_command(self.connect_id_motor, MOTOR_COMMAND_ID, command_data)
+        connect_id = next(x for x in self.attached_devices if x.is_motor() and x.hub_index == hub_idx)
+        self.output_command(connect_id.connect_id, MOTOR_COMMAND_ID, command_data)
 
-    def motor_turn(self, power):
-        self._motor_power(power, 35)
+    def motor_turn(self, hub_idx, power):
+        self._motor_power(hub_idx, power, 35)
 
-    def motor_break(self):
-        self._motor_power(MOTOR_BREAK, 0)
+    def motor_break(self, hub_idx):
+        self._motor_power(hub_idx, MOTOR_BREAK, 0)
 
-    def motor_drift(self):
-        self._motor_power(MOTOR_DRIFT, 0)
+    def motor_drift(self, hub_idx):
+        self._motor_power(hub_idx, MOTOR_DRIFT, 0)
 
 w = Wedo2()
 w.scan()
