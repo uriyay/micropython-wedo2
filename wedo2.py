@@ -142,7 +142,7 @@ class Wedo2:
     def scan(self):
         print("scanning..")
         # https://stackoverflow.com/a/66307619
-        self.ble.gap_scan(5000, 1280000, 11250, True)
+        self.ble.gap_scan(2000, 1280000, 11250, True)
 
     def ble_handler(self, event, data):
         if event == _IRQ_SCAN_RESULT:
@@ -296,8 +296,7 @@ class Wedo2:
             print("got indicate done")
 
     def is_connected(self):
-        return all(
-            [
+        return all(x is not None for x in [
                 self.conn_handle,
                 self.sensor_value_handle,
                 self.value_format_handle,
@@ -359,6 +358,3 @@ class Wedo2:
 
     def motor_drift(self, hub_idx):
         self._motor_power(hub_idx, MOTOR_DRIFT, 0)
-
-w = Wedo2()
-w.scan()
